@@ -1,0 +1,184 @@
+# Enjin-Arch-dotfiles
+# Install e.g.: sudo pacman -S cava
+# Remove e.g.: sudo pacman -R cava
+#
+# Names that aren't in the official repos are installed from the AUR
+# automatically by install.sh (if an AUR helper is available).
+
+# --------------------------------------------------
+# Hyprland / Wayland / Desktop
+# --------------------------------------------------
+
+hyprland
+hyprlock
+hyprpolkitagent
+quickshell
+rofi
+polkit
+qt6-wayland
+qt6-5compat
+
+# --------------------------------------------------
+# Desktop Portals / X11 Compatibility / User Dirs
+# --------------------------------------------------
+
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+xorg-xwayland
+xdg-user-dirs
+xdg-utils
+
+# --------------------------------------------------
+# Wallpaper / Screenshots / Image Tools
+# --------------------------------------------------
+
+awww
+mpvpaper
+grim
+slurp
+gpu-screen-recorder
+imagemagick
+matugen
+tesseract
+tesseract-data-eng
+
+# --------------------------------------------------
+# Networking / Bluetooth
+# --------------------------------------------------
+
+networkmanager
+network-manager-applet
+bluez
+bluez-utils
+blueman                  # blueman-manager
+
+# --------------------------------------------------
+# Audio
+# --------------------------------------------------
+
+pipewire
+pipewire-audio
+pipewire-pulse
+wireplumber
+pavucontrol
+playerctl
+
+# --------------------------------------------------
+# Clipboard
+# --------------------------------------------------
+
+cliphist
+wl-clipboard
+
+# --------------------------------------------------
+# Terminal / Shell
+# --------------------------------------------------
+
+kitty
+zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
+zsh-autocomplete
+starship
+eza
+
+# --------------------------------------------------
+# File Manager / File Utilities
+# --------------------------------------------------
+
+thunar
+thunar-volman
+thunar-archive-plugin
+gvfs
+tumbler
+xed
+ncdu
+zenity
+
+# --------------------------------------------------
+# GTK / Theming / Icons / Appearance
+# --------------------------------------------------
+
+gtk3
+gtk4
+glib2
+dconf
+gsettings-desktop-schemas
+adw-gtk-theme
+papirus-icon-theme
+gnome-themes-extra
+papirus-folders
+nwg-look
+
+# --------------------------------------------------
+# Media / Video Tools
+# --------------------------------------------------
+
+mpv
+ffmpeg
+ffmpegthumbnailer
+
+# --------------------------------------------------
+# System Monitoring / Hardware
+# --------------------------------------------------
+
+btop
+nvtop
+dmidecode
+brightnessctl
+gammastep
+
+# --------------------------------------------------
+# Power / Battery
+# --------------------------------------------------
+
+upower                   # bar battery module (Quickshell.Services.UPower)
+power-profiles-daemon
+
+# --------------------------------------------------
+# Bar: CPU / GPU Stats & Temperatures
+# --------------------------------------------------
+# The bar's GPU/temp probe is vendor-agnostic and degrades gracefully:
+#   CPU temp   -> `sensors` (lm_sensors)
+#   AMD GPU    -> sysfs (gpu_busy_percent + hwmon), nothing extra needed
+#   Intel GPU  -> sysfs clock estimate, nothing extra needed
+#   NVIDIA GPU -> nvidia-smi (nvidia-utils)
+# Uncomment ONLY what matches your hardware:
+
+lm_sensors               # `sensors` for CPU temp / GPU temp fallback
+# nvidia-utils           # NVIDIA: provides nvidia-smi (usage + temp)
+# intel-gpu-tools        # Intel: optional, intel_gpu_top for real usage % (needs CAP_PERFMON/root)
+
+# --------------------------------------------------
+# Desktop Notifications
+# --------------------------------------------------
+
+libnotify
+
+# --------------------------------------------------
+# Terminal / System Visualizers
+# --------------------------------------------------
+
+cava
+fastfetch
+cmatrix
+
+# --------------------------------------------------
+# Fonts
+# --------------------------------------------------
+
+ttf-jetbrains-mono-nerd
+ttf-iosevka-nerd
+ttf-roboto-mono
+otf-font-awesome
+
+# --------------------------------------------------
+# Scripting / Package / Application Utilities
+# --------------------------------------------------
+
+python
+python-gobject
+jq
+flatpak
+curl
+unzip

@@ -1,0 +1,30 @@
+.config/gtk-3.0/colors.css
+.config/gtk-4.0/colors.css
+.config/hypr/hyprlock-colors.conf
+.config/kitty/matugen.conf
+.config/rofi/colors.rasi
+.config/btop/themes/43pr.theme
+.config/cava/themes/43pr
+.config/quickshell/state/
+
+# Local machine/runtime data
+.config/43pr/state.json
+.config/spicetify/config-xpui.ini.local
+*.log
+
+# Never commit credentials or local databases
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+id_rsa*
+id_ed25519*
+credentials*
+secrets*
