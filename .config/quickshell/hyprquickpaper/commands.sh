@@ -15,6 +15,12 @@ esac
 
 [[ -f "$img" ]] || { echo "commands.sh: not a file: $img" >&2; exit 1; }
 
+# A monitor can be active in Hyprland while a wallpaper client still has a
+# stale Wayland output list after hotplug/reconfiguration. Repair that list
+# before applying the new image; the running watcher makes this a no-op when
+# everything is already healthy.
+"$HOME/.config/hypr/scripts/wallpaper-monitor-sync.sh" --once >/dev/null 2>&1 || true
+
 mkdir -p "$HOME/.cache/43pr"
 frames="$HOME/.cache/43pr/gif-frames"
 theme_img="$img"

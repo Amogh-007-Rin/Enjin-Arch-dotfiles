@@ -48,11 +48,11 @@ desktop. It brings the pieces together instead of treating them as isolated dotf
 
 ### 1. Get the repository
 
-Install Git and clone the repository. Replace the placeholder URL with your GitHub URL:
+Install Git and clone the repository:
 
 ```bash
 sudo pacman -S --needed git
-git clone <your-repository-url> ~/Enjin-Arch-dotfiles
+git clone https://github.com/Amogh-007-Rin/Enjin-Arch-dotfiles.git ~/Enjin-Arch-dotfiles
 cd ~/Enjin-Arch-dotfiles
 ```
 
@@ -72,9 +72,10 @@ less packages.txt
 less install.sh
 ```
 
-For NVIDIA systems, uncomment `nvidia-utils` in `packages.txt`. For Intel systems,
-`intel-gpu-tools` is optional. The installer can use `yay` or `paru`, and will offer to
-bootstrap `yay` if no AUR helper is available.
+The installer detects NVIDIA, AMD, Intel, and virtual GPUs. You can override detection
+with `--gpu nvidia`, `--gpu amd`, `--gpu intel`, `--gpu vm`, or a comma-separated hybrid
+selection. It can use `yay` or `paru`, and will offer to bootstrap `yay-bin` if no AUR
+helper is available.
 
 ### 3. Install
 
@@ -83,14 +84,22 @@ chmod +x install.sh
 ./install.sh
 ```
 
+For a non-interactive install, use the detected GPU stack and allow the installer to
+skip AUR packages:
+
+```bash
+./install.sh --yes --no-aur
+```
+
 The installer will:
 
 1. Verify that the machine is Arch-compatible and that `sudo`/`pacman` are available.
 2. Resolve packages from the official repositories and the AUR.
 3. Set Zsh as the default shell when it is installed.
 4. Back up conflicting configuration files to `~/.config-backups/<timestamp>/`.
-5. Link this repository into `~/.config` and render machine-specific paths safely.
-6. Create wallpaper/theme directories and generate the initial appearance.
+5. Generate hardware-specific GPU settings when needed and load them automatically.
+6. Link this repository into `~/.config` and render machine-specific paths safely.
+7. Create wallpaper/theme directories and generate the initial appearance.
 
 Log out and back in, or restart your Hyprland session, after installation. The repository
 must remain at its current path because the installed configuration points to it.
@@ -100,6 +109,10 @@ Preview the installer without guessing its options:
 ```bash
 ./install.sh --help
 ```
+
+The installer is idempotent. Existing files are moved to a timestamped backup before
+they are replaced, and the repository should remain at `~/Enjin-Arch-dotfiles` after
+installation because the live configuration uses symlinks into the clone.
 
 ## Keyboard map
 
@@ -114,13 +127,28 @@ The setup is designed to be usable without reaching for a mouse.
 | `Super + W` | Wallpaper picker |
 | `Super + T` | Theme picker |
 | `Ctrl + Left/Right` | Previous/next workspace |
-| `Super + Arrow` | Focus a window in that direction |
+| `Super + Arrow` | Focus the monitor/window in that direction |
 | `Ctrl + Shift + Arrow` | Move the focused window |
 | `Super + Shift + Arrow` | Resize the focused tiled window |
 | `Ctrl + Shift + P` | Power menu |
 
 Arrow-key actions are directional: `Up`, `Down`, `Left`, and `Right` all work where
-applicable. Resize shortcuts repeat in small increments when held.
+applicable. In an extended multi-monitor layout, a monitor in the requested direction
+takes priority; otherwise the nearest window in the current workspace receives focus.
+Resize shortcuts repeat in small increments when held.
+
+## Multiple monitors
+
+The display settings page supports **Extended** and **Mirrored** modes and remembers
+the last valid position, scale, transform, and refresh rate for each output. In the
+default arrangement, the external monitor can sit above the laptop: `Super + Up` moves
+focus to it and `Super + Down` returns to the laptop. Workspace groups remain separated
+by monitor when both outputs are connected.
+
+Wallpaper output registration is repaired automatically after monitor hotplugging,
+mirror/extend changes, reloads, and mode changes. The wallpaper picker also repairs the
+output list before applying a new static or live wallpaper, so a monitor does not remain
+black after being reconfigured.
 
 ## Daily use
 
@@ -158,7 +186,9 @@ are deliberately not committed to this repository.
 - Spotify's preferences path is rendered for the current user instead of preserving the
   original machine's absolute path.
 - Generated palettes, caches, runtime state, credentials, recordings, and personal
-  wallpaper collections are excluded. Read [SECURITY.md](SECURITY.md) before publishing.
+  wallpaper collections are excluded. The repository includes only the selected default
+  wallpaper used for the first-run appearance. Read [SECURITY.md](SECURITY.md) before
+  publishing.
 
 If you need to undo a change, remove the affected symlink and restore the corresponding
 file from the latest directory under `~/.config-backups/`.

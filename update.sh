@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-# 43PR/dotfiles updater (conservative / keep-my-changes)
+# Enjin-Arch-dotfiles updater (conservative / keep-my-changes)
 #
 # Companion to update2.sh. Where update2.sh makes the repo the source of
 # truth, this one keeps your customizations:

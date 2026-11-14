@@ -158,14 +158,65 @@ bind(mainMod .. " + " .. theme_key,         hl.dsp.exec_cmd("qs ipc call setting
 bind(mainMod .. " + " .. notifications_key, hl.dsp.exec_cmd("qs ipc call notifications toggle"))
 bind(mainMod .. " + " .. todo_key,          hl.dsp.exec_cmd("qs ipc call todo toggle"))
 
--- Move focus between tiled/floating windows without changing workspaces.
--- Use Hyprland's native Lua dispatcher; invoking `hyprctl dispatch movefocus`
--- from an exec bind is parsed as Lua on this Hyprland build and does not run.
--- Keep these separate from the Ctrl+Left/Right workspace bindings below.
-bind(mainMod .. " + LEFT",  hl.dsp.focus({ direction = "l" }))
-bind(mainMod .. " + RIGHT", hl.dsp.focus({ direction = "r" }))
-bind(mainMod .. " + UP",    hl.dsp.focus({ direction = "u" }))
-bind(mainMod .. " + DOWN",  hl.dsp.focus({ direction = "d" }))
+-- Switch focus in the requested physical direction. A monitor takes priority
+-- when one exists in that direction; otherwise Hyprland focuses the nearest
+-- window in the current workspace. This keeps Super+Arrow useful for both
+-- monitor navigation and side-by-side windows.
+local function focus_in_direction(direction)
+    return function()
+        local current = hl.get_active_monitor()
+        if current == nil then return end
+
+        local currentX = current.x + current.width / 2
+        local currentY = current.y + current.height / 2
+        local best = nil
+        local bestScore = math.huge
+
+        for _, monitor in ipairs(hl.get_monitors()) do
+            if monitor.name ~= current.name and monitor.enabled ~= false and monitor.disabled ~= true then
+                local dx = monitor.x + monitor.width / 2 - currentX
+                local dy = monitor.y + monitor.height / 2 - currentY
+                local primary, secondary
+
+                if direction == "l" and dx < 0 then
+                    primary, secondary = -dx, math.abs(dy)
+                elseif direction == "r" and dx > 0 then
+                    primary, secondary = dx, math.abs(dy)
+                elseif direction == "u" and dy < 0 then
+                    primary, secondary = -dy, math.abs(dx)
+                elseif direction == "d" and dy > 0 then
+                    primary, secondary = dy, math.abs(dx)
+                end
+
+                if primary ~= nil then
+                    -- Prefer the nearest monitor in the requested axis, then
+                    -- the one closest to the current monitor's centerline.
+                    local score = primary * 1000 + secondary
+                    if score < bestScore then
+                        best, bestScore = monitor, score
+                    end
+                end
+            end
+        end
+
+        if best ~= nil then
+            hl.dispatch(hl.dsp.focus({ monitor = best.name }))
+        else
+            local windowDirection = {
+                l = "left",
+                r = "right",
+                u = "up",
+                d = "down",
+            }
+            hl.dispatch(hl.dsp.focus({ direction = windowDirection[direction] }))
+        end
+    end
+end
+
+bind(mainMod .. " + LEFT",  focus_in_direction("l"))
+bind(mainMod .. " + RIGHT", focus_in_direction("r"))
+bind(mainMod .. " + UP",    focus_in_direction("u"))
+bind(mainMod .. " + DOWN",  focus_in_direction("d"))
 
 bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })
 bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })

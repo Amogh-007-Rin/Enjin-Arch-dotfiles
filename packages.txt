@@ -6,6 +6,14 @@
 # automatically by install.sh (if an AUR helper is available).
 
 # --------------------------------------------------
+# Installer prerequisites / hardware detection
+# --------------------------------------------------
+
+git
+base-devel
+pciutils
+
+# --------------------------------------------------
 # Hyprland / Wayland / Desktop
 # --------------------------------------------------
 

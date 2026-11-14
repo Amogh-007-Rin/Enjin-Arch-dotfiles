@@ -11,6 +11,10 @@ hl.monitor({ output = "", mode = "preferred", position = "auto", scale = 1 })
 -- 2. Optional per-machine overrides written by the Quickshell display settings.
 --    The file may define globals such as MONITOR1 / MONITOR2 and extra hl.monitor() rules.
 --    It is optional: if missing or broken, the defaults above still apply.
+--    Clear old values first so deleting/resetting the saved state cannot leave
+--    workspace rules pointing at a monitor from a previous config reload.
+MONITOR1 = nil
+MONITOR2 = nil
 local home = os.getenv("HOME")
 if home then
     local path = home .. "/.config/quickshell/state/display.lua"

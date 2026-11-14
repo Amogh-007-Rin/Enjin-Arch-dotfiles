@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-# 43PR/dotfiles updater v2
+# Enjin-Arch-dotfiles updater v2
 #
 # The repo is the source of truth for the desktop. Every file in .config is
 # symlinked into ~/.config and repaired on each run, EXCEPT:

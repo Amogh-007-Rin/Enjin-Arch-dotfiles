@@ -34,6 +34,14 @@ Item {
         return origin ? origin.name : act[0].name
     }
 
+    readonly property string displayMode: {
+        const act = activeMonitors
+        if (act.length < 2) return act.length === 1 ? "SINGLE" : "NONE"
+        const runtimeMirror = act.some(m => typeof m.mirrorOf === "string" && m.mirrorOf !== "")
+        const savedMirror = act.some(m => savedState[m.name] && savedState[m.name].mirror)
+        return runtimeMirror || savedMirror ? "MIRRORED" : "EXTENDED"
+    }
+
     Process {
         id: stateDirProcess
         command: ["mkdir", "-p", page.stateDir]
@@ -76,6 +84,19 @@ Item {
     function luaFileText() {
         const lines = []
         const names = Object.keys(savedState)
+
+        // The monitor module uses these names to keep workspace groups separate:
+        // workspaces 1-4 follow MONITOR1 and 5-6 follow MONITOR2.
+        const activeNames = names.filter(name => {
+            const entry = savedState[name]
+            return entry && entry.disabled !== true && typeof entry.mode === "string"
+        })
+        const monitor1 = mainName !== "" && activeNames.indexOf(mainName) !== -1
+            ? mainName : (activeNames.length > 0 ? activeNames[0] : "")
+        const monitor2 = activeNames.find(name => name !== monitor1) || ""
+        lines.push("MONITOR1 = " + (monitor1 === "" ? "nil" : "\"" + luaString(monitor1) + "\""))
+        lines.push("MONITOR2 = " + (monitor2 === "" ? "nil" : "\"" + luaString(monitor2) + "\""))
+
         for (let i = 0; i < names.length; i++) {
             const entry = savedState[names[i]]
             if (!entry) continue
@@ -89,21 +110,24 @@ Item {
                 position: typeof entry.position === "string" ? entry.position : "auto",
                 scale: typeof entry.scale === "number" ? scaleForMode(entry.mode, null, entry.scale) : 1,
                 transform: typeof entry.transform === "number" ? entry.transform : 0,
+                mirror: typeof entry.mirror === "string" ? entry.mirror : "",
                 disabled: false
             }))
         }
         return lines.join("\n") + "\n"
     }
 
+    function saveStateNow() {
+        try {
+            displayFile.setText(JSON.stringify({ monitors: page.savedState, main: page.mainName }, null, 2))
+            displayLua.setText(page.luaFileText())
+        } catch (error) {}
+    }
+
     Timer {
         id: stateSaveTimer
         interval: 300
-        onTriggered: {
-            try {
-                displayFile.setText(JSON.stringify({ monitors: page.savedState, main: page.mainName }, null, 2))
-                displayLua.setText(page.luaFileText())
-            } catch (error) {}
-        }
+        onTriggered: page.saveStateNow()
     }
 
     function monitorPosition(mon) {
@@ -128,6 +152,7 @@ Item {
     }
 
     function resetToConfig() {
+        if (pShell.running) return
         stateSaveTimer.stop()
         savedState = ({})
         mainName = ""
@@ -153,6 +178,10 @@ Item {
             : (options.mode !== undefined && typeof mon.transform === "number" ? mon.transform : undefined)
         if (transform !== undefined) values.push("transform = " + transform)
         if (options.disabled !== undefined) values.push("disabled = " + options.disabled)
+        const mirror = options.mirror !== undefined
+            ? options.mirror
+            : (savedState[mon.name] && savedState[mon.name].mirror ? savedState[mon.name].mirror : "")
+        if (mirror !== "") values.push("mirror = \"" + luaString(mirror) + "\"")
         return "hl.monitor({" + values.join(",") + "})"
     }
 
@@ -164,6 +193,8 @@ Item {
     // and refreshes twice because a re-enabled monitor needs a moment to modeset.
     Process {
         id: pShell
+        property var rollbackState: null
+        property string rollbackMainName: ""
         stdout: StdioCollector {
             onStreamFinished: if (text.trim().length > 0) console.log("[display] hyprctl:", text.trim())
         }
@@ -171,15 +202,30 @@ Item {
             onStreamFinished: if (text.trim().length > 0) console.warn("[display] hyprctl error:", text.trim())
         }
         onExited: exitCode => {
+            if (exitCode !== 0 && pShell.rollbackState !== null) {
+                // Do not leave the settings file claiming a mode that Hyprland rejected.
+                // The next toggle will start from the actual monitor layout after refresh.
+                page.savedState = pShell.rollbackState
+                page.mainName = pShell.rollbackMainName
+                stateSaveTimer.restart()
+                console.warn("[display] monitor layout change failed; restored previous saved layout")
+            }
+            pShell.rollbackState = null
+            pShell.rollbackMainName = ""
             refreshTimer.restart()
             lateRefreshTimer.restart()
         }
     }
 
-    function runShell(cmds) {
-        if (cmds.length === 0) return
-        pShell.command = ["sh", "-c", cmds.join("; ")]
+    function runShell(cmds, rollbackState = null, rollbackMainName = "") {
+        // A monitor modeset is asynchronous. Ignore repeated clicks until the
+        // compositor has reported the result, instead of replacing a half-run command.
+        if (cmds.length === 0 || pShell.running) return false
+        pShell.rollbackState = rollbackState
+        pShell.rollbackMainName = rollbackMainName
+        pShell.command = ["sh", "-c", "set -e; " + cmds.join("; ")]
         pShell.running = true
+        return true
     }
 
     // Hyprland applies each rule immediately, so any intermediate step that lands a monitor
@@ -200,18 +246,27 @@ Item {
     function logicalWidth(mon) { return logicalWidthFor(mon, mon.transform || 0) }
     function logicalHeight(mon) { return logicalHeightFor(mon, mon.transform || 0) }
 
-    // Lays the given monitors out left to right starting at 0x0. Only used when the monitor
-    // at the origin is disabled, so the remaining ones close the gap.
-    function layoutCommands(ordered) {
+    function parsePosition(value) {
+        const match = String(value || "").match(/^(-?\d+)x(-?\d+)$/)
+        return match ? { x: parseInt(match[1]), y: parseInt(match[2]) } : null
+    }
+
+    function positionString(x, y) { return x + "x" + y }
+
+    // Park all monitors before applying their final positions. This keeps the
+    // transition safe even when the target geometry is above, below, or to the
+    // left of the laptop instead of the default left-to-right arrangement.
+    function layoutCommands(ordered, targetPositions = null) {
         const cmds = []
 
         if (ordered.length > 1) {
             let parkX = 0
             for (let i = 0; i < ordered.length; i++)
-                parkX = Math.max(parkX, ordered[i].x + logicalWidth(ordered[i]))
+                parkX = Math.max(parkX, ordered[i].x + logicalWidth(ordered[i]) + 1)
+            parkX = Math.max(parkX, 1)
             for (let i = 0; i < ordered.length; i++) {
                 const m = ordered[i]
-                cmds.push("hyprctl eval '" + monitorLua(m, { mode: monitorMode(m), position: parkX + "x0", scale: fixedScale(m) }) + "'")
+                cmds.push("hyprctl eval '" + monitorLua(m, { mode: monitorMode(m), position: parkX + "x0", scale: fixedScale(m), mirror: "" }) + "'")
                 parkX += logicalWidth(m)
             }
         }
@@ -220,13 +275,88 @@ Item {
         for (let i = 0; i < ordered.length; i++) {
             const m = ordered[i]
             const mode = monitorMode(m)
-            const pos = x + "x0"
-            rememberMonitor(m, { mode: mode, scale: fixedScale(m), position: pos, disabled: false })
-            cmds.push("hyprctl eval '" + monitorLua(m, { mode: mode, position: pos, scale: fixedScale(m) }) + "'")
+            const requested = targetPositions && targetPositions[m.name]
+            const pos = requested ? positionString(requested.x, requested.y) : x + "x0"
+            rememberMonitor(m, {
+                mode: mode, scale: fixedScale(m), position: pos,
+                extendedPosition: pos, mirror: "", disabled: false
+            })
+            cmds.push("hyprctl eval '" + monitorLua(m, { mode: mode, position: pos, scale: fixedScale(m), mirror: "" }) + "'")
             x += logicalWidth(m)
         }
         if (ordered.length > 0) cmds.push("hyprctl dispatch focusmonitor '" + ordered[0].name + "'")
         return cmds
+    }
+
+    function setDisplayMode(mode) {
+        if (pShell.running) return
+        const active = page.activeMonitors.slice().sort((a, b) => a.x - b.x || a.y - b.y)
+        if (active.length < 2 || (mode !== "mirror" && mode !== "extend")) return
+
+        const previousState = savedState
+        const previousMainName = mainName
+        const main = active.find(m => m.name === page.effectiveMainName) || active[0]
+        const others = active.filter(m => m.name !== main.name)
+        mainName = main.name
+
+        if (mode === "extend") {
+            // Restore each monitor's last extended position. If no position was
+            // saved (for example after an old config), fall back to left-to-right.
+            const targetPositions = {}
+            const ordered = [main].concat(others)
+            let validSavedLayout = true
+            for (let i = 0; i < ordered.length; i++) {
+                const entry = savedState[ordered[i].name]
+                const saved = entry && parsePosition(entry.extendedPosition)
+                if (!saved) { validSavedLayout = false; break }
+                targetPositions[ordered[i].name] = saved
+            }
+            const commands = layoutCommands(ordered, validSavedLayout ? targetPositions : null)
+            saveStateNow()
+            runShell(commands, previousState, previousMainName)
+            return
+        }
+
+        const cmds = []
+        const mainMode = monitorMode(main)
+        const mainScale = fixedScale(main)
+        const extendedPositions = {}
+        const extendedMonitors = [main].concat(others)
+        for (let i = 0; i < extendedMonitors.length; i++) {
+            const mon = extendedMonitors[i]
+            const entry = savedState[mon.name]
+            // Do not overwrite the remembered extended geometry if this is
+            // already mirrored and all runtime positions are necessarily 0x0.
+            extendedPositions[mon.name] = page.displayMode !== "MIRRORED"
+                ? positionString(mon.x, mon.y)
+                : ((entry && parsePosition(entry.extendedPosition)) || { x: mon.x, y: mon.y })
+        }
+        rememberMonitor(main, {
+            mode: mainMode, scale: mainScale, position: "0x0",
+            extendedPosition: positionString(extendedPositions[main.name].x, extendedPositions[main.name].y),
+            mirror: "", disabled: false
+        })
+        cmds.push("hyprctl eval '" + monitorLua(main, {
+            mode: mainMode, position: "0x0", scale: mainScale, mirror: ""
+        }) + "'")
+
+        for (let i = 0; i < others.length; i++) {
+            const mon = others[i]
+            const modeName = monitorMode(mon)
+            const scale = fixedScale(mon)
+            rememberMonitor(mon, {
+                mode: modeName, scale: scale, position: "0x0",
+                extendedPosition: positionString(extendedPositions[mon.name].x, extendedPositions[mon.name].y),
+                mirror: main.name, disabled: false
+            })
+            cmds.push("hyprctl eval '" + monitorLua(mon, {
+                mode: modeName, position: "0x0", scale: scale, mirror: main.name
+            }) + "'")
+        }
+
+        cmds.push("hyprctl dispatch focusmonitor '" + main.name + "'")
+        saveStateNow()
+        runShell(cmds, previousState, previousMainName)
     }
 
     // MAIN is a preference, not a position: the layout is left exactly as the user arranged it.
@@ -234,7 +364,7 @@ Item {
     // the HDMI monitor jumped to the left; and since MAIN was derived from x/y == 0, moving it
     // anywhere else made MAIN disappear.)
     function setMainMonitor(main) {
-        if (!main || !main.name || main.disabled) return
+        if (pShell.running || !main || !main.name || main.disabled) return
         mainName = main.name
         stateSaveTimer.restart()
         runShell(["hyprctl dispatch focusmonitor '" + main.name + "'"])
@@ -254,7 +384,7 @@ Item {
     // whole layout so the top-left monitor sits at 0x0. Only monitors whose position
     // actually changes are touched; if several change they are parked to the right first.
     function placeMonitor(mon, ref, side) {
-        if (!mon || !ref || mon.name === ref.name || mon.disabled || ref.disabled) return
+        if (pShell.running || page.displayMode === "MIRRORED" || !mon || !ref || mon.name === ref.name || mon.disabled || ref.disabled) return
 
         let x = ref.x
         let y = ref.y
@@ -301,7 +431,10 @@ Item {
             const m = l.mon
             const pos = l.x + "x" + l.y
             const mode = monitorMode(m)
-            rememberMonitor(m, { mode: mode, scale: fixedScale(m), position: pos, disabled: false })
+            rememberMonitor(m, {
+                mode: mode, scale: fixedScale(m), position: pos,
+                extendedPosition: pos, disabled: false
+            })
         }
         for (let i = 0; i < changed.length; i++) {
             const l = changed[i]
@@ -314,7 +447,7 @@ Item {
     // Rotate a monitor. Rotating changes its footprint, so monitors to its right or below
     // are shifted by the size difference to avoid overlap. Changed monitors are parked first.
     function setTransform(mon, t) {
-        if (!mon || !mon.name || mon.disabled) return
+        if (pShell.running || page.displayMode === "MIRRORED" || !mon || !mon.name || mon.disabled) return
         const cur = mon.transform || 0
         if (cur === t) return
 
@@ -352,9 +485,11 @@ Item {
 
         for (let i = 0; i < layout.length; i++) {
             const l = layout[i]
+            const pos = l.x + "x" + l.y
             rememberMonitor(l.mon, {
                 mode: monitorMode(l.mon), scale: fixedScale(l.mon),
-                position: l.x + "x" + l.y, transform: l.transform, disabled: false })
+                position: pos, extendedPosition: pos,
+                transform: l.transform, disabled: false })
         }
         for (let i = 0; i < changed.length; i++) {
             const l = changed[i]
@@ -366,7 +501,7 @@ Item {
     }
 
     function setMonitorEnabled(mon, enabled) {
-        if (!mon || !mon.name) return
+        if (pShell.running || !mon || !mon.name) return
         let cmds = []
         if (enabled) {
             const entry = savedState[mon.name] || {}
@@ -374,15 +509,31 @@ Item {
             const scale = scaleForMode(mode, mon, typeof entry.scale === "number" ? entry.scale : 1)
             // A disabled monitor may report transform 0, so restore the saved one.
             const transform = typeof entry.transform === "number" ? entry.transform : 0
-            rememberMonitor(mon, { mode: mode, scale: scale, position: "auto", transform: transform, disabled: false })
+            const savedExtended = parsePosition(entry.extendedPosition)
+            const restoredPosition = page.displayMode === "MIRRORED"
+                ? "0x0"
+                : (savedExtended ? positionString(savedExtended.x, savedExtended.y) : "auto")
+            const fields = {
+                mode: mode, scale: scale, position: restoredPosition,
+                transform: transform, disabled: false
+            }
+            if (savedExtended) fields.extendedPosition = positionString(savedExtended.x, savedExtended.y)
+            rememberMonitor(mon, fields)
             // disabled: false is required. Without it Hyprland keeps the monitor disabled.
-            cmds.push("hyprctl eval '" + monitorLua(mon, { mode: mode, position: "auto", scale: scale, transform: transform, disabled: false }) + "'")
+            cmds.push("hyprctl eval '" + monitorLua(mon, { mode: mode, position: restoredPosition, scale: scale, transform: transform, disabled: false }) + "'")
         } else {
             if (page.activeMonitors.length <= 1) return
             const atOrigin = mon.x === 0 && mon.y === 0
             const wasMain = page.effectiveMainName === mon.name
             const rest = page.activeMonitors.filter(m => m.name !== mon.name).sort((a, b) => a.x - b.x)
-            rememberMonitor(mon, { mode: monitorMode(mon), scale: fixedScale(mon), disabled: true })
+            const oldEntry = savedState[mon.name] || {}
+            const extendedPosition = page.displayMode === "MIRRORED"
+                ? oldEntry.extendedPosition
+                : positionString(mon.x, mon.y)
+            rememberMonitor(mon, {
+                mode: monitorMode(mon), scale: fixedScale(mon),
+                extendedPosition: extendedPosition, disabled: true
+            })
             cmds.push("hyprctl eval '" + monitorLua(mon, { disabled: true }) + "'")
             // The disabled monitor can no longer be MAIN; hand it to the first remaining one.
             if (wasMain && rest.length > 0) {
@@ -510,6 +661,7 @@ Item {
     function fixedScale(mon) { return scaleForMode(monitorMode(mon), mon, mon.scale) }
 
     function setScale(mon, scale, isRetry = false) {
+        if (pShell.running) return
         const applied = validScale(mon, scale)
 
         const idx = page.monitors.findIndex(m => m.name === mon.name)
@@ -576,6 +728,7 @@ Item {
 
     // Applies a mode (resolution + refresh rate) while keeping position and a valid scale.
     function applyMode(mon, mode) {
+        if (pShell.running) return
         const scale = scaleForMode(mode, mon, mon.scale !== undefined ? mon.scale : 1)
         rememberMonitor(mon, { mode: mode, scale: scale, position: monitorPosition(mon) })
         pResolution.command = [
@@ -652,6 +805,71 @@ Item {
             }
 
             Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+            Column {
+                width: parent.width; spacing: 8
+
+                Row {
+                    width: parent.width; spacing: 8
+
+                    Text {
+                        text: "LAYOUT"; color: Theme.textDim
+                        font.family: Theme.fontFamily; font.pixelSize: Theme.textSizeBody
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                        text: page.displayMode
+                        color: page.displayMode === "MIRRORED" ? Theme.accent : Theme.textDim
+                        font.family: Theme.fontFamily; font.pixelSize: Theme.textSizeBody; font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    width: parent.width; spacing: 8
+
+                    Rectangle {
+                        width: (parent.width - parent.spacing) / 2; height: 34; radius: Theme.radius
+                        color: page.displayMode === "EXTENDED" ? Theme.alpha(Theme.accent, 0.12) : (extendMouse.containsMouse ? Theme.alpha(Theme.accent, 0.08) : "#00000000")
+                        border.width: 1
+                        border.color: page.displayMode === "EXTENDED" || extendMouse.containsMouse ? Theme.accent : Theme.border
+
+                        Text {
+                            anchors.centerIn: parent; text: "EXTEND"; color: Theme.text
+                            font.family: Theme.fontFamily; font.pixelSize: Theme.textSizeGroup; font.bold: true; font.letterSpacing: 1
+                        }
+
+                        MouseArea {
+                            id: extendMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: page.activeMonitors.length > 1 && !pShell.running
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: page.setDisplayMode("extend")
+                        }
+                    }
+
+                    Rectangle {
+                        width: (parent.width - parent.spacing) / 2; height: 34; radius: Theme.radius
+                        color: page.displayMode === "MIRRORED" ? Theme.alpha(Theme.accent, 0.12) : (mirrorMouse.containsMouse ? Theme.alpha(Theme.accent, 0.08) : "#00000000")
+                        border.width: 1
+                        border.color: page.displayMode === "MIRRORED" || mirrorMouse.containsMouse ? Theme.accent : Theme.border
+
+                        Text {
+                            anchors.centerIn: parent; text: "MIRROR"; color: Theme.text
+                            font.family: Theme.fontFamily; font.pixelSize: Theme.textSizeGroup; font.bold: true; font.letterSpacing: 1
+                        }
+
+                        MouseArea {
+                            id: mirrorMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: page.activeMonitors.length > 1 && !pShell.running
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: page.setDisplayMode("mirror")
+                        }
+                    }
+                }
+            }
 
             Column {
                 width: parent.width; spacing: 8
